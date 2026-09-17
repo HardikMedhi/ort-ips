@@ -37,7 +37,7 @@ The main entry point is `source_selection/ort_source_selector.py`.
 ### Example
 
 ```bash
-python source_selection/ort_source_selector.py -f ../ort_cat.fits -n 10 -ra 0.8 -dec -14
+python source_selection/ort_source_selector.py -f ../ort_cat.fits -n 10 -ra 187 -dec 12
 ```
 
 This command will:
