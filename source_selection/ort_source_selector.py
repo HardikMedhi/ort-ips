@@ -254,7 +254,7 @@ def plot(
 
 def read_yaml_file() -> dict:
     """Load the telescope configuration dictionary from the YAML metadata file."""
-    filepath_tel_info = Path(__file__).parent / "tel_info.yaml"
+    filepath_tel_info = Path(__file__).parent.parent / "tel_info.yaml"
     with open(filepath_tel_info, "r") as f:
         info = yaml.safe_load(f)
     return info['ort']
