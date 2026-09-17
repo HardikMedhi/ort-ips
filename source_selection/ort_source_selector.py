@@ -13,7 +13,7 @@ from astropy.table import Table
 
 def main(args:tuple):
     """Run the full source-selection workflow for a catalog and pointing location."""
-    cat_filepath, n, pointing_ra, pointing_dec, dontsaveplot = args
+    cat_filepath, n, pointing_ra, pointing_dec, dont_save_plot, dont_save_csv = args
 
     tel_info = read_yaml_file()
 
@@ -33,7 +33,7 @@ def main(args:tuple):
     print(df_selected)
 
     fig, ax = plot(cat_data, df_infov, df_selected, pointing_ra, pointing_dec, tel_info)
-    if not dontsaveplot:
+    if not dont_save_plot:
         folder_path = Path(__file__).parent / "output"
         folder_path.mkdir(exist_ok=True)
 
@@ -44,7 +44,17 @@ def main(args:tuple):
         print(f"Plot saved to {filepath}.")
     plt.show()
 
-def get_args() -> tuple[Path, int, float, float, bool]:
+    if not dont_save_csv:
+        folder_path = Path(__file__).parent / "output"
+        folder_path.mkdir(exist_ok=True)
+
+        cat_filename = cat_filepath.stem
+        filepath = folder_path / f"{cat_filename}_{pointing_ra:.1f}_{pointing_dec:.1f}_{n}beams.csv"
+
+        df_selected.to_csv(filepath, index=False)
+        print(f"Table of selected sources saved to {filepath}")
+
+def get_args() -> tuple[Path, int, float, float, bool, bool]:
     """Parse command-line arguments for the catalog path, pointing, and beam count."""
     parser = argparse.ArgumentParser(
         description="This program filters a catalog of sources to obtain a list of sources that" \
@@ -61,6 +71,8 @@ def get_args() -> tuple[Path, int, float, float, bool]:
                         help="Pointing declination in degrees")
     parser.add_argument("--dontsaveplot", action="store_true",
                         help="(Optional) If invoked, the plot will not be saved, just displayed.")
+    parser.add_argument("--dontsavecsv", action="store_true",
+                        help="(Optional) If invoked, the csv file with the selected sources will not be saved.")
 
     args = parser.parse_args()
     cat_filepath = Path(args.cat_filepath)
@@ -68,8 +80,9 @@ def get_args() -> tuple[Path, int, float, float, bool]:
     ra = args.ra
     dec = args.dec
     dont_save_plot = args.dontsaveplot
+    dont_save_csv = args.dontsavecsv
 
-    return cat_filepath, n, ra, dec, dont_save_plot
+    return cat_filepath, n, ra, dec, dont_save_plot, dont_save_csv
 
 # Core Functions
 
@@ -135,9 +148,7 @@ def select_sources(df:pd.DataFrame, num_beams:int, tel_info:dict) -> pd.DataFram
     mis_indices = list(nx.algorithms.approximation.maximum_independent_set(G))
     mis_df = df.iloc[mis_indices].copy()
 
-    selected_df = (
-        mis_df.sort_values(by=flux_col, ascending=False).head(num_beams).copy()
-    )
+    selected_df = mis_df.sort_values(by=flux_col, ascending=False).head(num_beams).copy().reset_index(drop=True)
 
     return selected_df
 
@@ -246,7 +257,7 @@ def plot(
     )
     ax.invert_xaxis()
     ax.grid(True, linestyle=":", alpha=0.6)
-    ax.legend(loc="upper right")
+    ax.legend(loc="best")
 
     return fig, ax
 

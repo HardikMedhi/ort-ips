@@ -19,6 +19,10 @@ The `source_selection` component prepares candidate source lists for ORT IPS obs
 - are compatible with the requested number of independent beams,
 - and are selected to minimize beam overlap while prioritizing the strongest sources.
 
+The source-selection step constructs a graph in which sources that overlap in beam footprint are treated as adjacent. A maximum independent set from graph theory is then computed to find a set of mutually non-overlapping sources, and the strongest among them are ranked by flux for the final selection.
+
+The current script also removes duplicate source entries using the source name column before selection, and optionally saves both a plot and a CSV file of the chosen targets.
+
 ## Operating `ort_source_selector.py`
 
 The main entry point is `source_selection/ort_source_selector.py`.
