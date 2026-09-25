@@ -8,6 +8,8 @@ import matplotlib.patches as patches
 import networkx as nx
 from pathlib import Path
 from astropy.table import Table
+from astropy.coordinates import SkyCoord
+import astropy.units as u
 
 # Managing Functions
 
@@ -17,7 +19,9 @@ def main(args:tuple):
 
     tel_info = read_yaml_file()
 
-    cat_data = Table.read(cat_filepath).to_pandas()
+    cat_table = Table.read(cat_filepath)
+    cat_table = convert_coordinates_to_degrees(cat_table)
+    cat_data = cat_table.to_pandas()
     name_col = get_colnames(cat_data)[-1]
     cat_data = cat_data.drop_duplicates(subset=name_col)
 
@@ -269,6 +273,29 @@ def read_yaml_file() -> dict:
     with open(filepath_tel_info, "r") as f:
         info = yaml.safe_load(f)
     return info['ort']
+
+def convert_coordinates_to_degrees(table: Table) -> Table:
+    """Convert the table's RA and Dec columns to degree-valued Astropy columns."""
+    ra_col, dec_col, _, _ = get_colnames(table)
+    ra_unit = table[ra_col].unit
+    dec_unit = table[dec_col].unit
+
+    if ra_unit is None or dec_unit is None:
+        raise ValueError(
+            f"Coordinate columns must define units in the input table: "
+            f"{ra_col}={ra_unit!r}, {dec_col}={dec_unit!r}"
+        )
+
+    coordinates = SkyCoord(
+        ra=table[ra_col],
+        dec=table[dec_col],
+        unit=(ra_unit, dec_unit),
+        frame="icrs",
+    )
+    table[ra_col] = coordinates.ra.to(u.deg)
+    table[dec_col] = coordinates.dec.to(u.deg)
+
+    return table
 
 def get_colnames(df:pd.DataFrame) -> tuple[str, str, str, str]:
     """Identify the RA, Dec, flux, and source-name columns from a catalog DataFrame."""
