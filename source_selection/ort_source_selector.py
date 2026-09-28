@@ -15,7 +15,10 @@ import astropy.units as u
 
 def main(args:tuple):
     """Run the full source-selection workflow for a catalog and pointing location."""
-    cat_filepath, n, pointing_ra, pointing_dec, dont_save_plot, dont_save_csv = args
+    (
+        cat_filepath, n, pointing_ra, pointing_dec,
+        dont_save_plot, dont_save_csv, beams_at_pointing_ra,
+    ) = args
 
     tel_info = read_yaml_file()
 
@@ -30,15 +33,42 @@ def main(args:tuple):
         print("No sources fall within the module's FOV at the given pointing coordinates.")
         return
 
-    df_selected = select_sources(df_infov, n, tel_info)
+    df_selected = select_sources(
+        df_infov, n, tel_info, pointing_ra, pointing_dec
+    )
     
     print(f"Total sources in module FOV: {len(df_infov)}")
+    print("\nModule Sources:")
+    df_infov_display = add_sensitivity_scores(
+        df_infov, ra_col=get_colnames(df_infov)[0],
+        dec_col=get_colnames(df_infov)[1],
+        pointing_ra=pointing_ra,
+        pointing_dec=pointing_dec,
+        tel_info=tel_info,
+    )
+    df_infov_display[name_col] = df_infov_display[name_col].map(strip_source_prefix)
+    print(df_infov_display)
+
     print("\nSelected Independent Beam Sources:")
-    df_selected_display = df_selected.copy()
+    df_selected_display = add_sensitivity_scores(
+        df_selected, ra_col=get_colnames(df_selected)[0],
+        dec_col=get_colnames(df_selected)[1],
+        pointing_ra=pointing_ra,
+        pointing_dec=pointing_dec,
+        tel_info=tel_info,
+    )
     df_selected_display[name_col] = df_selected_display[name_col].map(strip_source_prefix)
     print(df_selected_display)
 
-    fig, ax = plot(cat_data, df_infov, df_selected, pointing_ra, pointing_dec, tel_info)
+    fig, ax = plot(
+        cat_data,
+        df_infov,
+        df_selected,
+        pointing_ra,
+        pointing_dec,
+        tel_info,
+        beams_at_pointing_ra,
+    )
     if not dont_save_plot:
         folder_path = Path(__file__).parent / "output"
         folder_path.mkdir(exist_ok=True)
@@ -60,7 +90,7 @@ def main(args:tuple):
         df_selected.to_csv(filepath, index=False)
         print(f"Table of selected sources saved to {filepath}")
 
-def get_args() -> tuple[Path, int, float, float, bool, bool]:
+def get_args() -> tuple[Path, int, float, float, bool, bool, bool]:
     """Parse command-line arguments for the catalog path, pointing, and beam count."""
     parser = argparse.ArgumentParser(
         description="This program filters a catalog of sources to obtain a list of sources that" \
@@ -79,6 +109,11 @@ def get_args() -> tuple[Path, int, float, float, bool, bool]:
                         help="(Optional) If invoked, the plot will not be saved, just displayed.")
     parser.add_argument("--dontsavecsv", action="store_true",
                         help="(Optional) If invoked, the csv file with the selected sources will not be saved.")
+    parser.add_argument(
+        "--beams-at-pointing-ra",
+        action="store_true",
+        help="Place all synthesized beam centers at the pointing RA in the plot.",
+    )
 
     args = parser.parse_args()
     cat_filepath = Path(args.cat_filepath)
@@ -87,8 +122,9 @@ def get_args() -> tuple[Path, int, float, float, bool, bool]:
     dec = args.dec
     dont_save_plot = args.dontsaveplot
     dont_save_csv = args.dontsavecsv
+    beams_at_pointing_ra = args.beams_at_pointing_ra
 
-    return cat_filepath, n, ra, dec, dont_save_plot, dont_save_csv
+    return cat_filepath, n, ra, dec, dont_save_plot, dont_save_csv, beams_at_pointing_ra
 
 # Core Functions
 
@@ -122,9 +158,96 @@ def get_infov_sources(df:pd.DataFrame, pointing_ra:float, pointing_dec:float, te
 
     return df_infov
 
-def select_sources(df:pd.DataFrame, num_beams:int, tel_info:dict) -> pd.DataFrame:
+def calculate_primary_beam_sensitivity(
+        ra:np.ndarray, dec:np.ndarray, pointing_ra:float, pointing_dec:float,
+        tel_info:dict
+    ) -> np.ndarray:
+    """Calculate normalized sinc-squared sensitivity at source positions."""
+    mod_fwhm_ra, mod_fwhm_dec = calculate_beam_fwhm(
+        pointing_dec, tel_info, is_module=True
+    )
+    cos_dec_ptr = np.cos(np.radians(pointing_dec))
+
+    dra = (np.asarray(ra) - pointing_ra + 180.0) % 360.0 - 180.0
+    dra = dra * cos_dec_ptr / (mod_fwhm_ra / 2.0)
+    ddec = (np.asarray(dec) - pointing_dec) / (mod_fwhm_dec / 2.0)
+
+    return np.sinc(dra) ** 2 * np.sinc(ddec) ** 2
+
+def calculate_synthesized_beam_sensitivity(
+        ra:np.ndarray, dec:np.ndarray, pointing_ra:float, pointing_dec:float,
+        tel_info:dict
+    ) -> np.ndarray:
+    """Calculate normalized sinc-squared sensitivity of the synthesized beam."""
+    beam_fwhm_ra, beam_fwhm_dec = calculate_beam_fwhm(
+        pointing_dec, tel_info, is_module=False
+    )
+    cos_dec_ptr = np.cos(np.radians(pointing_dec))
+    beam_fwhm_ra_sky = beam_fwhm_ra / cos_dec_ptr
+
+    dra = (np.asarray(ra) - pointing_ra + 180.0) % 360.0 - 180.0
+    dra = dra / (beam_fwhm_ra_sky / 2.0)
+    ddec = (np.asarray(dec) - pointing_dec) / (beam_fwhm_dec / 2.0)
+
+    return np.sinc(dra) ** 2 * np.sinc(ddec) ** 2
+
+def add_sensitivity_scores(
+        df:pd.DataFrame, ra_col:str, dec_col:str,
+        pointing_ra:float, pointing_dec:float, tel_info:dict
+    ) -> pd.DataFrame:
+    """Return a display copy with primary, synthesized, and total sensitivities."""
+    scored_df = df.copy()
+    scored_df["Primary Sensitivity"] = calculate_primary_beam_sensitivity(
+        scored_df[ra_col].values,
+        scored_df[dec_col].values,
+        pointing_ra,
+        pointing_dec,
+        tel_info,
+    )
+    scored_df["Synthesized Sensitivity"] = calculate_synthesized_beam_sensitivity(
+        scored_df[ra_col].values,
+        scored_df[dec_col].values,
+        pointing_ra,
+        pointing_dec,
+        tel_info,
+    )
+    scored_df["Total Sensitivity"] = (
+        scored_df["Primary Sensitivity"]
+        * scored_df["Synthesized Sensitivity"]
+    )
+    return scored_df
+
+def select_sources(
+        df:pd.DataFrame, num_beams:int, tel_info:dict,
+        pointing_ra:float, pointing_dec:float
+    ) -> pd.DataFrame:
     """Choose a non-overlapping subset of bright sources for independent beams."""
     ra_col, dec_col, flux_col, _ = get_colnames(df)
+
+    df = df.copy()
+    df["_primary_beam_sensitivity"] = calculate_primary_beam_sensitivity(
+        df[ra_col].values,
+        df[dec_col].values,
+        pointing_ra,
+        pointing_dec,
+        tel_info=tel_info,
+    )
+    df["_synthesized_beam_sensitivity"] = calculate_synthesized_beam_sensitivity(
+        df[ra_col].values,
+        df[dec_col].values,
+        pointing_ra,
+        pointing_dec,
+        tel_info=tel_info,
+    )
+    df["_total_sensitivity"] = (
+        df["_primary_beam_sensitivity"]
+        * df["_synthesized_beam_sensitivity"]
+    )
+    df["_flux_numeric"] = pd.to_numeric(df[flux_col], errors="coerce").fillna(-np.inf)
+    df = df.sort_values(
+        by=["_total_sensitivity", "_flux_numeric"],
+        ascending=False,
+    ).reset_index(drop=True)
 
     num_srcs = len(df)
     ras_local = df[ra_col].values
@@ -150,11 +273,42 @@ def select_sources(df:pd.DataFrame, num_beams:int, tel_info:dict) -> pd.DataFram
             if distance_metric < 1.0:
                 G.add_edge(i, j)
 
-    # Maximum Independent Set
-    mis_indices = list(nx.algorithms.approximation.maximum_independent_set(G))
+    # Maximum-weight independent set, represented as a maximum-weight clique
+    # in the complement graph. Sensitivity is the primary selection criterion;
+    # flux breaks ties between sources with comparable sensitivity.
+    sensitivity_rank = df["_total_sensitivity"].rank(
+        method="first", ascending=False
+    )
+    flux_rank = df["_flux_numeric"].rank(method="first", ascending=False)
+    rank_base = num_srcs ** 2 + 1
+    node_weights = (
+        (num_srcs - sensitivity_rank + 1) * rank_base
+        + (num_srcs - flux_rank + 1)
+    )
+    complement_graph = nx.complement(G)
+    nx.set_node_attributes(
+        complement_graph,
+        {index: int(weight) for index, weight in node_weights.items()},
+        "weight",
+    )
+    mis_indices, _ = nx.algorithms.clique.max_weight_clique(
+        complement_graph,
+        weight="weight",
+    )
     mis_df = df.iloc[mis_indices].copy()
 
-    selected_df = mis_df.sort_values(by=flux_col, ascending=False).head(num_beams).copy().reset_index(drop=True)
+    selected_df = mis_df.sort_values(
+        by=["_total_sensitivity", "_flux_numeric"],
+        ascending=False,
+    ).head(num_beams).copy().reset_index(drop=True)
+    selected_df = selected_df.drop(
+        columns=[
+            "_primary_beam_sensitivity",
+            "_synthesized_beam_sensitivity",
+            "_total_sensitivity",
+            "_flux_numeric",
+        ]
+    )
 
     return selected_df
 
@@ -162,7 +316,8 @@ def select_sources(df:pd.DataFrame, num_beams:int, tel_info:dict) -> pd.DataFram
 
 def plot(
         catalogue_df:pd.DataFrame, in_fov_df:pd.DataFrame, selected_df:pd.DataFrame, 
-        pointing_ra:float, pointing_dec:float, tel_info:dict
+    pointing_ra:float, pointing_dec:float, tel_info:dict,
+    beams_at_pointing_ra:bool = False,
     ) -> tuple:
     """Create a diagnostic sky plot showing the FOV, catalog sources, and selected beams."""
     fig, ax = plt.subplots(figsize=(10, 8))
@@ -195,6 +350,22 @@ def plot(
             label="Sources in Module FOV",
         )
 
+        selected_names = {
+            strip_source_prefix(name) for name in selected_df[name_col]
+        }
+        for _, row in in_fov_df.iterrows():
+            source_name = strip_source_prefix(row[name_col])
+            if source_name in selected_names:
+                continue
+            ax.annotate(
+                source_name,
+                (row[ra_col], row[dec_col]),
+                xytext=(4, 4),
+                textcoords="offset points",
+                fontsize=7,
+                color="navy",
+            )
+
     # 3. Single Module FOV Bounding Box
     mod_fwhm_ra, mod_fwhm_dec = calculate_beam_fwhm(pointing_dec, tel_info, is_module=True)
     mod_fwhm_ra_sky = mod_fwhm_ra / cos_dec_ptr
@@ -210,9 +381,13 @@ def plot(
         300,
     )
     ra_mesh, dec_mesh = np.meshgrid(ra_grid, dec_grid)
-    ra_offset = (ra_mesh - pointing_ra) / (mod_fwhm_ra_sky / 2.0)
-    dec_offset = (dec_mesh - pointing_dec) / (mod_fwhm_dec / 2.0)
-    sensitivity = np.sinc(ra_offset) ** 2 * np.sinc(dec_offset) ** 2
+    sensitivity = calculate_primary_beam_sensitivity(
+        ra_mesh,
+        dec_mesh,
+        pointing_ra,
+        pointing_dec,
+        tel_info,
+    )
     sensitivity_mesh = ax.pcolormesh(
         ra_mesh,
         dec_mesh,
@@ -255,12 +430,13 @@ def plot(
 
         for _, row in selected_df.iterrows():
             src_ra, src_dec = row[ra_col], row[dec_col]
+            beam_ra = pointing_ra if beams_at_pointing_ra else src_ra
             b_ra, b_dec = calculate_beam_fwhm(src_dec, tel_info, is_module=False)
             b_ra_sky = b_ra / np.cos(np.radians(src_dec))
 
             # Draw full synthesized beam ellipse
             ellipse = patches.Ellipse(
-                xy=(src_ra, src_dec),
+                xy=(beam_ra, src_dec),
                 width=b_ra_sky,
                 height=b_dec,
                 angle=0.0,
