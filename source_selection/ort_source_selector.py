@@ -34,7 +34,9 @@ def main(args:tuple):
     
     print(f"Total sources in module FOV: {len(df_infov)}")
     print("\nSelected Independent Beam Sources:")
-    print(df_selected)
+    df_selected_display = df_selected.copy()
+    df_selected_display[name_col] = df_selected_display[name_col].map(strip_source_prefix)
+    print(df_selected_display)
 
     fig, ax = plot(cat_data, df_infov, df_selected, pointing_ra, pointing_dec, tel_info)
     if not dont_save_plot:
@@ -197,6 +199,33 @@ def plot(
     mod_fwhm_ra, mod_fwhm_dec = calculate_beam_fwhm(pointing_dec, tel_info, is_module=True)
     mod_fwhm_ra_sky = mod_fwhm_ra / cos_dec_ptr
 
+    ra_grid = np.linspace(
+        pointing_ra - mod_fwhm_ra_sky / 2.0,
+        pointing_ra + mod_fwhm_ra_sky / 2.0,
+        300,
+    )
+    dec_grid = np.linspace(
+        pointing_dec - mod_fwhm_dec / 2.0,
+        pointing_dec + mod_fwhm_dec / 2.0,
+        300,
+    )
+    ra_mesh, dec_mesh = np.meshgrid(ra_grid, dec_grid)
+    ra_offset = (ra_mesh - pointing_ra) / (mod_fwhm_ra_sky / 2.0)
+    dec_offset = (dec_mesh - pointing_dec) / (mod_fwhm_dec / 2.0)
+    sensitivity = np.sinc(ra_offset) ** 2 * np.sinc(dec_offset) ** 2
+    sensitivity_mesh = ax.pcolormesh(
+        ra_mesh,
+        dec_mesh,
+        sensitivity,
+        cmap="viridis",
+        vmin=0.0,
+        vmax=1.0,
+        shading="auto",
+        alpha=0.45,
+        zorder=0,
+    )
+    fig.colorbar(sensitivity_mesh, ax=ax, label="Normalized sinc$^2$ sensitivity")
+
     fov_rect = patches.Rectangle(
         xy=(
             pointing_ra - mod_fwhm_ra_sky / 2.0,
@@ -244,7 +273,7 @@ def plot(
             ax.add_patch(ellipse)
 
             ax.annotate(
-                row[name_col],
+                strip_source_prefix(row[name_col]),
                 (src_ra, src_dec),
                 xytext=(4, 4),
                 textcoords="offset points",
@@ -252,6 +281,25 @@ def plot(
                 color="darkred",
                 weight="bold",
             )
+
+    ax.axvline(
+        pointing_ra,
+        color="darkgreen",
+        linestyle="-.",
+        linewidth=1.2,
+        alpha=0.8,
+        zorder=2,
+        label="Pointing Center",
+    )
+    ax.axhline(
+        pointing_dec,
+        color="darkgreen",
+        linestyle="-.",
+        linewidth=1.2,
+        alpha=0.8,
+        zorder=2,
+        label="_nolegend_",
+    )
 
     # Formatting
     ax.set_xlabel("Right Ascension (deg)")
@@ -266,6 +314,14 @@ def plot(
     return fig, ax
 
 # Utility Functions
+
+def strip_source_prefix(name:object) -> object:
+    """Remove the catalog's leading lowercase b prefix from displayed names."""
+    if isinstance(name, (bytes, np.bytes_)):
+        name = name.decode("utf-8", errors="replace")
+    if isinstance(name, str) and name.startswith("b"):
+        return name[1:]
+    return name
 
 def read_yaml_file() -> dict:
     """Load the telescope configuration dictionary from the YAML metadata file."""
