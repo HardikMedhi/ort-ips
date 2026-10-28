@@ -1,4 +1,6 @@
-# ORT IPS Observation Support Code
+# Work in Progress
+
+<!-- # ORT IPS Observation Support Code
 
 This repository hosts code to support Interplanetary Scintillation (IPS) observations with the Ooty Radio Telescope (ORT). It is intended to assist with practical planning and preparation for ORT IPS observing work.
 
@@ -10,6 +12,27 @@ The project will continue to grow over time and may include multiple tasks relat
 - `tel_info.yaml` — telescope configuration and beam metadata used by the source-selection routines.
 - `requirements.txt` — Python dependencies for the project.
 - generated output plots — saved under the relevant script directory when plotting is enabled.
+
+## IPS source selector
+
+The new `ips_source_selector` package combines catalog visibility filtering
+with helioprojective-track source selection. It applies solar elongation,
+telescope declination, and endpoint-elevation constraints, then selects
+sources that provide broad track coverage over the requested date range.
+
+```bash
+PYTHONPATH=/data/PhD/thesis/code/ips-main python -m ips_source_selector \
+	--catalog path/to/catalog.fits \
+	--num-sources 10 \
+	--date-start 20260928 \
+	--date-end 20261031 \
+	--time-start 0500 \
+	--time-end 1800 \
+	--telescope telescope_name
+```
+
+See `ips_source_selector/README.md` for the complete argument list and output
+behavior.
 
 ## Source selection module
 
@@ -51,3 +74,4 @@ This command will:
 ---
 
 Author: Hardik Medhi
+-->
